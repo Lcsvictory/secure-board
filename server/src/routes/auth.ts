@@ -1,5 +1,5 @@
 import { Router } from "express";
-import crypto from "node:crypto";
+import bcrypt from "bcrypt";
 import { pool } from "../db/pool.js";
 
 export const authRouter = Router();
@@ -13,7 +13,11 @@ authRouter.post("/register", async (req, res) => {
     return res.status(400).json({ message: "name must be 1-30 characters" });
   }
 
-  const passwordHash = crypto.createHash("md5").update(password).digest("hex");
+    if (password.length < 8) {
+    return res.status(400).json({ message: "password must be at least 8 characters" });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
   await pool.execute(
     "INSERT INTO users(email, password_hash, name, role) VALUES (?, ?, ?, 'USER')",
     [email, passwordHash, name]
@@ -28,28 +32,38 @@ authRouter.post("/login", async (req, res) => {
     return res.status(400).json({ message: "email and password must be strings" });
   }
 
-  const passwordHash = crypto.createHash("md5").update(password).digest("hex");
   const [rows]: any = await pool.execute(
-    `SELECT id, email, name, role FROM users
-     WHERE email = ? AND password_hash = ?`,
-    [email, passwordHash]
+    `SELECT id, email, name, role, password_hash FROM users
+     WHERE email = ?`,
+    [email]
   );
 
-  if (rows.length === 0) {
+  const row = rows[0];
+if (!row || !(await bcrypt.compare(password, row.password_hash))) {
     return res.status(401).json({ message: `login failed: ${email} / ${password}` });
   }
 
-  req.session.user = rows[0];
-  res.cookie("lastLoginUser", JSON.stringify(rows[0]), { httpOnly: false });
-  res.json(rows[0]);
+    const user = {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role
+  };
+
+  req.session.user = user;
+  res.cookie("lastLoginUser", JSON.stringify(user), { httpOnly: false });
+  res.json(user);
 });
 
 authRouter.get("/me", (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ message: "not logged in" });
-  }
+  } 
+    
+  
   res.json(req.session.user);
 });
+
 
 authRouter.post("/logout", (req, res) => {
   req.session.destroy(() => res.json({ message: "logout" }));
